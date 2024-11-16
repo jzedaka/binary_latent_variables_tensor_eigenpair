@@ -100,7 +100,7 @@ def init_model(d: int = 6, m: int = 3, n: int = 100, sigma: int = 0):
 
 def estimate_moments(X: np.ndarray):
     M1 = np.mean(X, axis=0)
-    M2 = np.cov(X.T)
+    M2 = X.T @ X / X.shape[1]
 
     n_features = X.shape[1]
     M3 = np.zeros((n_features, n_features, n_features))
@@ -123,36 +123,34 @@ def denoise_moments(M1, M2, M3, sigma: int):
 
 def get_whitning_matrix(M: np.ndarray):
     eigenvalues, eigenvectors = np.linalg.eigh(M)
-    print(np.mean(eigenvalues >= 0))
-    # print(eigenvectors)
+    eigenvalues[eigenvalues < 0] = 1e-6
     eigenvalues_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues))
     K = eigenvectors @ eigenvalues_inv_sqrt @ eigenvectors.T
     return K
 
-def get_candidates(X: np.ndarray, sigma:int):
+def get_candidates(X: np.ndarray, sigma:int, tau=1e-3):
+    print(X, X.shape)
     M1, M2, M3 = estimate_moments(X=X)
+    print(M2, X.shape)
+
     M2, M3 = denoise_moments(M1=M1, M2=M2, M3=M3, sigma=sigma)
     K = get_whitning_matrix(M2)
 
-    # print(K)
-    # W = mode_n_product(M3, K, 0)
-    # print(W)
-    # print("-----------------")
-    # # W = mode_n_product(W, K, 1)
-    # print(W)
-    # print("-----------------")
-    # W = mode_n_product(W, K, 2)
-    # print(W)
-    # print("-----------------")
-    # eigenpairs = tensor_power_iteration(W)
-    # candidates = []
-    # for l, v in eigenpairs:
-    #     if l >= 1:
-    #         c = np.dot(K, v) / l
-    #         candidates.append(c)
-    # print(eigenpairs)
-    # return np.array(candidates  )
+    W = mode_n_product(M3, K, 0)
+    W = mode_n_product(W, K, 1)
+    W = mode_n_product(W, K, 2)
 
+    eigenpairs = tensor_power_iteration(W)
+    candidates = []
+    for l, v in eigenpairs:
+        if l - tau >= 1:
+            c = np.dot(K, v) / l
+            candidates.append(c)
+    print(eigenpairs)
+    return np.array(candidates  )
+
+def fillter_candidates(candidates: np.ndarray):
+    pass
 
 def main():
     print("Main")
@@ -160,7 +158,7 @@ def main():
     X = init_model(sigma=sigma, n=10)
     print(f'X shape= {X.shape}')
     candidates = get_candidates(X=X, sigma=sigma)
-
+    fillter_candidates(candidates=candidates)
 
 if __name__ == '__main__':
     print("Start")
