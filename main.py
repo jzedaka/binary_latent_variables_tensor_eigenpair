@@ -1,5 +1,5 @@
 import numpy as np
-#
+
 
 
 def mode_n_product(tensor: np.ndarray, matrix: np.ndarray, mode: int):
@@ -8,7 +8,7 @@ def mode_n_product(tensor: np.ndarray, matrix: np.ndarray, mode: int):
     tensor_transposed = np.moveaxis(tensor, mode, 0)
 
     # Perform matrix multiplication along the first axis
-    result = np.tensordot(matrix, tensor_transposed, axes=(1, 0))
+    result = np.tensordot(matrix.T, tensor_transposed, axes=(1, 0))
 
     # Move the result back to the original axis order
     final_result = np.moveaxis(result, 0, mode)
@@ -17,22 +17,10 @@ def mode_n_product(tensor: np.ndarray, matrix: np.ndarray, mode: int):
 
 def tensor_power_iteration(T, tol=1e-10, max_iter=100):
     """
-    Finds all eigenpairs of a symmetric third-order tensor using power iteration.
-
-    Parameters:
-        T (np.ndarray): Symmetric tensor of shape (n, n, n).
-        tol (float): Convergence tolerance for eigenvalue updates.
-        max_iter (int): Maximum number of iterations.
-
-    Returns:
-        eigenpairs (list): A list of tuples (lambda, v) containing the eigenvalue
-                           and the corresponding eigenvector.
     """
     n = T.shape[0]
-    assert T.shape == (n, n, n), "Input tensor must be third-order and cubic."
 
     def tensor_vector_product(T, v):
-        """Performs tensor-vector product: T[i,j,k] * v[j] * v[k]."""
         return np.einsum('ijk,j,k->i', T, v, v)
 
     def deflate_tensor(T, lambda_, v):
@@ -43,7 +31,7 @@ def tensor_power_iteration(T, tol=1e-10, max_iter=100):
     eigenpairs = []
 
     # Power iteration for each eigenpair
-    for _ in range(n):
+    for _ in range(2 ** T.shape[0]):
         # Initialize a random vector
         v = np.random.rand(n)
         v /= np.linalg.norm(v)
@@ -73,7 +61,7 @@ def tensor_power_iteration(T, tol=1e-10, max_iter=100):
     return eigenpairs
 
 
-def init_model(d: int = 6, m: int = 3, n: int = 100, sigma: int = 0):
+def init_model(d: int = 6, m: int = 12, n: int = 100, sigma: int = 0):
 
     # random h vector
     a = np.random.randn(d)
@@ -88,26 +76,23 @@ def init_model(d: int = 6, m: int = 3, n: int = 100, sigma: int = 0):
     W_norms_vec = np.sqrt(np.square(W).sum(axis=1))
     W = W / W_norms_vec[:, None]
 
-    print(W.shape)
-    print(np.square(W[0]).sum())
     X = W.T @ h.T
 
     # add gaussian noise
     X +=  sigma * np.random.randn(*X.shape)
 
-    return X
+    return X, W.T
 
 
 def estimate_moments(X: np.ndarray):
-    M1 = np.mean(X, axis=0)
-    M2 = X.T @ X / X.shape[1]
+    M1 = np.mean(X, axis=1)
+    M2 = X @ X.T / X.shape[1]
 
-    n_features = X.shape[1]
+    n_features = X.shape[0]
     M3 = np.zeros((n_features, n_features, n_features))
-    for x in X:
+    for x in X.T:
         M3 += np.outer(x, np.outer(x, x).flatten()).reshape(n_features, n_features, n_features)
     M3 /= X.shape[1]
-    print(X.shape, M1.shape, M2.shape, M3.shape)
     return M1, M2, M3
 
 def denoise_moments(M1, M2, M3, sigma: int):
@@ -121,20 +106,24 @@ def denoise_moments(M1, M2, M3, sigma: int):
 
     return M2, M3
 
-def get_whitning_matrix(M: np.ndarray):
+def get_whitning_matrix(M: np.ndarray, d_est: int):
     eigenvalues, eigenvectors = np.linalg.eigh(M)
+    idx = eigenvalues.argsort()[::-1]   
+    eigenvalues = eigenvalues[idx[:d_est]]
+    eigenvectors = eigenvectors[:, idx[:d_est]]
     eigenvalues[eigenvalues < 0] = 1e-6
+
     eigenvalues_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues))
-    K = eigenvectors @ eigenvalues_inv_sqrt @ eigenvectors.T
+    K = eigenvectors @ eigenvalues_inv_sqrt 
     return K
 
-def get_candidates(X: np.ndarray, sigma:int, tau=1e-3):
-    print(X, X.shape)
+def get_candidates(X: np.ndarray, sigma:int, tau=1e-8):
     M1, M2, M3 = estimate_moments(X=X)
-    print(M2, X.shape)
 
     M2, M3 = denoise_moments(M1=M1, M2=M2, M3=M3, sigma=sigma)
-    K = get_whitning_matrix(M2)
+    d_est = np.linalg.matrix_rank(M2)
+
+    K = get_whitning_matrix(M=M2, d_est=d_est)
 
     W = mode_n_product(M3, K, 0)
     W = mode_n_product(W, K, 1)
@@ -142,20 +131,18 @@ def get_candidates(X: np.ndarray, sigma:int, tau=1e-3):
 
     eigenpairs = tensor_power_iteration(W)
     candidates = []
+    print(f'Number of eigenpairs = {len(eigenpairs)}')
     for l, v in eigenpairs:
-        if l - tau >= 1:
+        if 1 - tau <= l:
             c = np.dot(K, v) / l
             candidates.append(c)
-    print(eigenpairs)
-    return np.array(candidates  )
-
-def compute_ks_score(candidates: np.ndarray):
-    pass
+    
+    print(f'Number of candidates = {len(candidates)}')
+    return np.array(candidates), d_est
 
 
-def binary_rounding_fillter(candidates: np.ndarray, test_X):
-    # print(candidates.shape, test_X.shape)
-    cX = np.dot(candidates, test_X.T)
+def binary_rounding_fillter(candidates: np.ndarray, test_X: np.ndarray, d: int):
+    cX = np.dot(candidates, test_X)
     cX_round = np.round(cX)
     cX_round[cX >= 1] = 1
     cX_round[cX < 1] = 0
@@ -164,19 +151,22 @@ def binary_rounding_fillter(candidates: np.ndarray, test_X):
     norm = np.sum(np.power(candidates, 2), axis=1)
     # print(diff_norm, norm.shape, diff_norm, diff_norm.shape)
     scores = diff_norm / (norm + 1e-6)
-    print(scores, scores.shape)
-    return candidates[np.argsort(scores)[-3:]]
-    # scores = compute_ks_score(candidates=candidates)
+    return candidates[np.argsort(scores)[-d:]]
 
 
 def main():
-    print("Main")
-    sigma = 0
-    X = init_model(sigma=sigma, n=10)
-    print(f'X shape= {X.shape}')
-    candidates = get_candidates(X=X, sigma=sigma)
-    binary_rounding_fillter(candidates, X)
+    sigma = 0.1
+    d = 10
+    m = 30
+    n = 1000
+    for n in [100, 1_000, 10_000, 100_000]:
+        X, W = init_model(sigma=sigma, d=d, m=m ,n=n)
+        candidates, d_est = get_candidates(X=X, sigma=sigma)
+        filltered_c = binary_rounding_fillter(candidates, X, d_est)
+        W_hat = np.linalg.pinv(filltered_c)
+        # print(W.shape, W_hat.shape)
+        err = np.mean(np.power(W-W_hat, 2))
+        print(f' n = {n}, error = {err}')
 
 if __name__ == '__main__':
-    print("Start")
     main()
