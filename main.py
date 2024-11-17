@@ -149,8 +149,25 @@ def get_candidates(X: np.ndarray, sigma:int, tau=1e-3):
     print(eigenpairs)
     return np.array(candidates  )
 
-def fillter_candidates(candidates: np.ndarray):
+def compute_ks_score(candidates: np.ndarray):
     pass
+
+
+def binary_rounding_fillter(candidates: np.ndarray, test_X):
+    # print(candidates.shape, test_X.shape)
+    cX = np.dot(candidates, test_X.T)
+    cX_round = np.round(cX)
+    cX_round[cX >= 1] = 1
+    cX_round[cX < 1] = 0
+    # print(cX.shape)
+    diff_norm = np.sum(np.power((cX - cX_round), 2), axis=1)
+    norm = np.sum(np.power(candidates, 2), axis=1)
+    # print(diff_norm, norm.shape, diff_norm, diff_norm.shape)
+    scores = diff_norm / (norm + 1e-6)
+    print(scores, scores.shape)
+    return candidates[np.argsort(scores)[-3:]]
+    # scores = compute_ks_score(candidates=candidates)
+
 
 def main():
     print("Main")
@@ -158,7 +175,7 @@ def main():
     X = init_model(sigma=sigma, n=10)
     print(f'X shape= {X.shape}')
     candidates = get_candidates(X=X, sigma=sigma)
-    fillter_candidates(candidates=candidates)
+    binary_rounding_fillter(candidates, X)
 
 if __name__ == '__main__':
     print("Start")
