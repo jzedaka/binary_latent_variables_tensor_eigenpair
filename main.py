@@ -1,53 +1,51 @@
 import numpy as np
 from blvep import BLVEP
+from utils import init_model, sample_x, calc_loss
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
-def sample_x(h_mean, h_cov, W, n: int, sigma: int):
-    h = np.random.multivariate_normal(mean=h_mean, cov=h_cov, size=n).astype(np.int16)  # binary rounding!
-    h[h != 0] = 1
-    X = W.T @ h.T
-    # add gaussian noise
-    X +=  sigma * np.random.randn(*X.shape)
+def perform_experiment(d=3, m=5, n_steps=10):
 
-    return X
-
-def init_model(d: int, m: int):
-
-    # random h vector
-    h_mean = np.random.randn(d)
-    h_cov = np.random.randn(d, d)
-    h_cov = np.dot(h_cov, h_cov.T)
-
-    # random W matrix. cloumns are drqwn from the unit sphere!
-    W = np.random.randn(d, m)
-    # normalize
-    W_norms_vec = np.sqrt(np.square(W).sum(axis=1))
-    W = W / W_norms_vec[:, None]
-
-    return h_mean, h_cov, W
-
-
-def main():
-
-    n_steps = 10
-    d = 1
-    m = 10
-
+    results = dict()
     h_mean, h_cov, W = init_model(d=d, m=m)
-
-    for sigma in [0, 0.1, 0.2, 0.3, 0.4]:
+    print(W.T)
+    for sigma in [0.1, 0.4, 0.8]:
+        results[sigma] = dict()
         print("--------------------------")
-        blvep_alg = BLVEP(d=d, sigma=sigma)
-
-        for n in np.array([1e2, 1e3, 1e4, 1e5], dtype=np.int32):
-            err = 0
+        blvep_alg = BLVEP(d=d, sigma=sigma, tau=0, fillter_method='ks', wls_K=d)
+        Ns = np.array([10e3, 10e4], dtype=np.int32)
+        for n in Ns:
+            errors = []
+            sucsess = 0
             for _ in range(n_steps):
                 X = sample_x(h_mean=h_mean, h_cov=h_cov, W=W, n=n, sigma=sigma)
-                W_hat = blvep_alg.recover_W(X=X)
-                assert W_hat.shape == W.T.shape, W_hat.shape
-                err += np.mean(np.power(W.T - W_hat, 2))
+                X_fillter = sample_x(h_mean=h_mean, h_cov=h_cov, W=W, n=n, sigma=sigma)
+                try:
+                    W_hat = blvep_alg.recover_W(X=X, X_fillter=X_fillter)
+                    sucsess += 1
+                    assert W_hat.shape == W.T.shape, W_hat.shape
+                    loss, _ = calc_loss(W.T, W_hat)
+                    errors.append(loss)
+                except:
+                    pass
+            
+            results[sigma][n] = np.array(errors)
+            print(f"sigma = {sigma},  n = {n}, error = {np.mean(errors)} +- {np.std(errors)}")
 
-            print(f'sigma = {sigma},  n = {n}, error = {err/n_steps}')
+    return results
 
-if __name__ == '__main__':
+def main():
+    results = dict()
+    for d in [1]:
+        m = d * 5
+        print('^^^^^^^^^^^^^^^^^')
+        print(f'd = {d}, m = {m}')
+        print('^^^^^^^^^^^^^^^^^')
+
+        r = perform_experiment(d=d, m=m, n_steps=1)
+        results[d] = r
+
+
+if __name__ == "__main__":
     main()
