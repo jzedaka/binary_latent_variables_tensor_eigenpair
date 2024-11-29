@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def tensor_power_iteration(T, tol=1e-10, max_iter=10_000):
+def tensor_power_iteration(T, tol=1e-10, max_iter=10_000, rng : np.random.RandomState = None):
     """ """
     n = T.shape[0]
     eigenpairs = []
@@ -9,7 +9,7 @@ def tensor_power_iteration(T, tol=1e-10, max_iter=10_000):
     # Power iteration for each eigenpair
     for _ in range(T.shape[0] ** 3):
         # Initialize a random vector
-        v = np.random.rand(n)
+        v = rng.rand(n)
         v /= np.linalg.norm(v)
 
         for _ in range(max_iter):
