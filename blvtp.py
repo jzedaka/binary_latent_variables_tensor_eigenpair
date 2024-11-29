@@ -11,15 +11,17 @@ class BLVEP:
     def __init__(self,
                  d: int,
                  sigma: float,
-                 fillter_method: AnyStr = 'br',
+                 fillter_method: AnyStr = 'ks',
                  tau: float = 1e-8,
-                 wls_K: int = 6):
+                 wls_K: int = 3,
+                 rng: np.random.RandomState = None):
         assert fillter_method in ['br', 'ks']
         self.d = d
         self.sigma = sigma
         self.tau = tau
         self.fillter_method = fillter_method
         self.wls_K = wls_K
+        self.rng = rng
 
     @staticmethod
     def _estimate_moments(X: np.ndarray):
@@ -37,7 +39,6 @@ class BLVEP:
     def _denoise_moments(self, M1, M2, M3):
         M2 -= self.sigma * self.sigma * np.eye(M2.shape[0], dtype=np.float64)
         base_vectors = np.eye(M2.shape[0], dtype=np.float64)
-        n_features = M2.shape[0]
         for i in range(M2.shape[0]):
             to_reduce = (
                 np.einsum("i,j,k->ijk", M1, base_vectors[i], base_vectors[i])
@@ -68,7 +69,7 @@ class BLVEP:
 
         W = tensorly.tenalg.multi_mode_dot(M3, [K, K, K], [0, 1, 2], transpose=True)
 
-        eigenpairs = tensor_power_iteration(W)
+        eigenpairs = tensor_power_iteration(T=W, rng=self.rng)
         candidates = []
         lambdas = []
         for l, v in eigenpairs:
@@ -103,35 +104,32 @@ class BLVEP:
         cX_round = np.round(cX)
         cX_round[cX_round >= 1] = 1
         cX_round[cX_round < 1] = 0
-        # print(cX.shape)
         diff_norm = np.sum(np.power((cX - cX_round), 2), axis=1)
         norm = np.sum(np.power(candidates, 2), axis=1)
         scores = diff_norm / (X_fillter.shape[1] * norm + 1e-6)
         return candidates[np.argsort(scores)[-self.d :]]
 
-    def recover_W(self, X, X_fillter: np.ndarray):
-        candidates, lambdas = self._get_candidates(X=X)
+    def recover_W(self, X1: np.ndarray, X2: np.ndarray):
+        candidates, lambdas = self._get_candidates(X=X1)
         assert len(candidates) >= self.d, len(candidates)
         if self.fillter_method == 'br' or self.sigma == 0:
             filltered_c = self._binary_rounding_fillter(candidates=candidates,
-                                                        X_fillter=X_fillter)
+                                                        X_fillter=X2)
         elif self.fillter_method == 'ks':
             filltered_c = self._ks_filtering(candidates=candidates,
-                                             X_fillter=X_fillter,
+                                             X_fillter=X2,
                                              lambdas=lambdas)
         else:
             raise Exception("invalid fillter_method")
 
         W_hat = np.linalg.pinv(filltered_c)
-        print(W_hat)
-        W_hat = self.WLS_step(W=W_hat, X=X_fillter.T)
-        print("------------")
-        print(W_hat)
-        return W_hat
+        W_wls = self.WLS_step(W=W_hat, X=X2.T)
+
+        return W_hat, W_wls
 
     def WLS_step(self, W: np.ndarray, X: np.ndarray):
 
-        n_samples, n_features = X.shape
+        n_samples = X.shape[0]
 
         binary_vectors = np.array(list(itertools.product([0, 1], repeat=self.d)))
         h_top_K = np.zeros((n_samples, self.wls_K, self.d))
@@ -146,26 +144,43 @@ class BLVEP:
                 likelihoods[k] = liklihood
             
             top_k_indices = np.argsort(likelihoods)[-self.wls_K:] 
-            h_top_K[j, ...] = top_k_indices
+            h_top_K[j, ...] = binary_vectors[top_k_indices]
             top_k_likelihoods = likelihoods[top_k_indices]
             
             # Normalize the likelihoods to get the weight matrix Pi
             Pi[:, j] = top_k_likelihoods / np.sum(top_k_likelihoods)
-        
 
-        # Compute S and H for the weighted least squares
-        S = np.zeros((n_features, self.d))
-        H = np.zeros((self.d, self.d))
-        
+
+        # S = None
+        # H = None
+        # for j in range(n_samples):
+        #     x_j = X[j]
+        #     for k in range(self.wls_K):
+        #         h_kj = h_top_K[j, k, :]
+        #         if S is None:
+        #             S = Pi[k, j] * np.outer(x_j, h_kj)
+        #             H = Pi[k, j] * np.outer(h_kj, h_kj)
+        #         else:
+        #             S = np.concatenate((S, Pi[k, j] * np.outer(x_j, h_kj)), axis=1)
+        #             H = np.concatenate((H, Pi[k, j] * np.outer(h_kj, h_kj)), axis=1)
+
+        # H_inv = np.linalg.pinv(H).astype(np.float32)
+        # W_wls = S.astype(np.float32) @ H_inv 
+
+        Pi = np.sqrt(Pi)
+        H_vec = None
+        X_vec = None
         for j in range(n_samples):
             x_j = X[j]
             for k in range(self.wls_K):
                 h_kj = h_top_K[j, k, :]
-                S += Pi[k, j] * np.outer(x_j, h_kj)
-                H += Pi[k, j] * np.outer(h_kj, h_kj)
+                if X_vec is None:
+                    X_vec = Pi[k, j] * x_j
+                    H_vec = Pi[k, j] * h_kj
+                else:
+                    X_vec = np.vstack((X_vec, Pi[k, j] * x_j))
+                    H_vec = np.vstack((H_vec,  Pi[k, j] * h_kj))
 
-        H_inv = np.linalg.pinv(H)
-        W_wls = S @ H_inv 
-
+        W_wls = np.linalg.lstsq(H_vec, X_vec)[0].T
 
         return W_wls 
