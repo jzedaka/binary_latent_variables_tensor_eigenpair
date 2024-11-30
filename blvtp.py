@@ -8,14 +8,16 @@ import tensorly
 
 class BLVEP:
 
-    def __init__(self,
-                 d: int,
-                 sigma: float,
-                 fillter_method: AnyStr = 'ks',
-                 tau: float = 1e-8,
-                 wls_K: int = 3,
-                 rng: np.random.RandomState = None):
-        assert fillter_method in ['br', 'ks']
+    def __init__(
+        self,
+        d: int,
+        sigma: float,
+        fillter_method: AnyStr = "ks",
+        tau: float = 1e-8,
+        wls_K: int = 3,
+        rng: np.random.RandomState = None,
+    ):
+        assert fillter_method in ["br", "ks"]
         self.d = d
         self.sigma = sigma
         self.tau = tau
@@ -80,7 +82,9 @@ class BLVEP:
 
         return np.array(candidates), np.array(lambdas)
 
-    def _ks_filtering(self, candidates: np.ndarray, X_fillter: np.ndarray, lambdas: np.ndarray):
+    def _ks_filtering(
+        self, candidates: np.ndarray, X_fillter: np.ndarray, lambdas: np.ndarray
+    ):
 
         num_candidates = candidates.shape[0]
         ks_scores = np.zeros(num_candidates)
@@ -90,9 +94,9 @@ class BLVEP:
             sigma = self.sigma * np.linalg.norm(c)
             cX = np.dot(c, X_fillter)
             G = lambda t: (1 - p) * norm.cdf(t, 0, sigma) + p * norm.cdf(t, 1, sigma)
-            
+
             t_vals = cX
-            empirical_cdf = np.searchsorted(np.sort(cX), cX, side='right') / cX.size
+            empirical_cdf = np.searchsorted(np.sort(cX), cX, side="right") / cX.size
             ks_stat = np.max(np.abs(G(t_vals) - empirical_cdf))
             ks_scores[i] = ks_stat
 
@@ -112,18 +116,21 @@ class BLVEP:
     def recover_W(self, X1: np.ndarray, X2: np.ndarray):
         candidates, lambdas = self._get_candidates(X=X1)
         assert len(candidates) >= self.d, len(candidates)
-        if self.fillter_method == 'br' or self.sigma == 0:
-            filltered_c = self._binary_rounding_fillter(candidates=candidates,
-                                                        X_fillter=X2)
-        elif self.fillter_method == 'ks':
-            filltered_c = self._ks_filtering(candidates=candidates,
-                                             X_fillter=X2,
-                                             lambdas=lambdas)
+        if self.fillter_method == "br" or self.sigma == 0:
+            filltered_c = self._binary_rounding_fillter(
+                candidates=candidates, X_fillter=X2
+            )
+        elif self.fillter_method == "ks":
+            filltered_c = self._ks_filtering(
+                candidates=candidates, X_fillter=X2, lambdas=lambdas
+            )
         else:
             raise Exception("invalid fillter_method")
 
         W_hat = np.linalg.pinv(filltered_c)
-        W_wls = self.WLS_step(W=W_hat, X=X2.T)
+        W_wls = W_hat
+        if self.wls_K > 0:
+            W_wls = self.WLS_step(W=W_hat, X=X2.T)
 
         return W_hat, W_wls
 
@@ -134,38 +141,23 @@ class BLVEP:
         binary_vectors = np.array(list(itertools.product([0, 1], repeat=self.d)))
         h_top_K = np.zeros((n_samples, self.wls_K, self.d))
         Pi = np.zeros((self.wls_K, n_samples))
-        
+
         for j in range(n_samples):
             likelihoods = np.zeros(binary_vectors.shape[0])
             for k, h in enumerate(binary_vectors):
                 Wh = np.dot(W, h)
-                squared_distance = np.sum((X[j]  - Wh) ** 2)
-                liklihood = (1 / np.sqrt(2 * np.pi * self.sigma**2)) * np.exp(-squared_distance / (2 * self.sigma**2))
+                squared_distance = np.sum((X[j] - Wh) ** 2)
+                liklihood = (1 / np.sqrt(2 * np.pi * self.sigma**2)) * np.exp(
+                    -squared_distance / (2 * self.sigma**2)
+                )
                 likelihoods[k] = liklihood
-            
-            top_k_indices = np.argsort(likelihoods)[-self.wls_K:] 
+
+            top_k_indices = np.argsort(likelihoods)[-self.wls_K :]
             h_top_K[j, ...] = binary_vectors[top_k_indices]
             top_k_likelihoods = likelihoods[top_k_indices]
-            
+
             # Normalize the likelihoods to get the weight matrix Pi
             Pi[:, j] = top_k_likelihoods / np.sum(top_k_likelihoods)
-
-
-        # S = None
-        # H = None
-        # for j in range(n_samples):
-        #     x_j = X[j]
-        #     for k in range(self.wls_K):
-        #         h_kj = h_top_K[j, k, :]
-        #         if S is None:
-        #             S = Pi[k, j] * np.outer(x_j, h_kj)
-        #             H = Pi[k, j] * np.outer(h_kj, h_kj)
-        #         else:
-        #             S = np.concatenate((S, Pi[k, j] * np.outer(x_j, h_kj)), axis=1)
-        #             H = np.concatenate((H, Pi[k, j] * np.outer(h_kj, h_kj)), axis=1)
-
-        # H_inv = np.linalg.pinv(H).astype(np.float32)
-        # W_wls = S.astype(np.float32) @ H_inv 
 
         Pi = np.sqrt(Pi)
         H_vec = None
@@ -179,8 +171,8 @@ class BLVEP:
                     H_vec = Pi[k, j] * h_kj
                 else:
                     X_vec = np.vstack((X_vec, Pi[k, j] * x_j))
-                    H_vec = np.vstack((H_vec,  Pi[k, j] * h_kj))
+                    H_vec = np.vstack((H_vec, Pi[k, j] * h_kj))
 
         W_wls = np.linalg.lstsq(H_vec, X_vec)[0].T
 
-        return W_wls 
+        return W_wls
